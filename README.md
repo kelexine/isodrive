@@ -4,7 +4,7 @@
 
 * `sudo apt install build-essential`
 
-* `git clone https://github.com/nitanmarcel/isodrive`
+* `git clone https://github.com/kelexine/isodrive`
 
 * `cd isodrive`
 
