@@ -4,13 +4,12 @@ SRCS = src/util.cpp src/configfsisomanager.cpp src/androidusbisomanager.cpp src/
 OBJS = $(SRCS:.cpp=.o)
 TARGET = isodrive
 INSTALL_DIR := 
-ifeq UNAME_S := $(shell uname -s)
-	ifeq ($(UNAME_S),Linux)
-		OSFLAG += -D /usr/local/bin
-	endif
-	ifeq ($(UNAME_S),Android)
-		OSFLAG += -D /data/data/com.termux/files/usr/bin
-	endif
+UNAME_O := $(shell uname -o)
+ifeq ($(UNAME_O),Linux)
+		INSTALL_DIR += -D /usr/local/bin
+endif
+ifeq ($(UNAME_O),Android)
+	INSTALL_DIR += -D /data/data/com.termux/files/usr/bin
 endif
 
 all: $(TARGET)
