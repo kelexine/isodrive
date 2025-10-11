@@ -14,13 +14,19 @@ int print_help() {
   printf("Optional arguments:\n");
   printf("-rw\t\t Mounts the file in read write mode.\n");
   printf("-cdrom\t\t Mounts the file as a cdrom.\n");
+  printf("-windows\t Enables Windows ISO mode (auto-enables CD-ROM, read-only, and Windows-compatible USB descriptors).\n");
   printf("-configfs\t Forces the app to use configfs.\n");
   printf("-usbgadget\t Forces the app to use sysfs.\n\n");
+  
+  printf("Examples:\n");
+  printf("  isodrive ubuntu.iso -cdrom\n");
+  printf("  isodrive Windows10.iso -windows\n");
+  printf("  isodrive debian.iso -rw\n\n");
 
   return 1;
 }
 
-void configs(char *iso_target, char *cdrom, char *ro) {
+void configs(char *iso_target, char *cdrom, char *ro, char *windows_mode) {
   printf("Using configfs!\n");
 
   if (!supported())
@@ -29,9 +35,9 @@ void configs(char *iso_target, char *cdrom, char *ro) {
     return;
   }
   if (strcmp(ro, "1") != 0 && strcmp(ro, "0") != 0) {
-    printf("\nFaled to parse -rw argument. Defaulting to ro\n");
+    printf("\nFailed to parse -rw argument. Defaulting to ro\n");
     printf("Check --help for more usage info\n");
-    ro = (char *)"0";
+    ro = (char *)"1";
   }
 
   if (strcmp(cdrom, "1") != 0 && strcmp(cdrom, "0") != 0) {
@@ -40,7 +46,7 @@ void configs(char *iso_target, char *cdrom, char *ro) {
     cdrom = (char *)"0";
   }
 
-  mount_iso(iso_target, cdrom, ro);
+  mount_iso(iso_target, cdrom, ro, windows_mode);
 }
 
 void usb(char *iso_target, char *cdrom, char *ro) {
@@ -52,7 +58,7 @@ void usb(char *iso_target, char *cdrom, char *ro) {
   }
   if (strcmp(cdrom, "0") != 0 || strcmp(ro, "1") != 0)
   {
-    printf((char*)"cdrom/ro flags ignored. (this is expected)");
+    printf("cdrom/ro flags ignored. (this is expected)\n");
   }
   if (strcmp(iso_target, (char *)"") == 0)
     usb_reset_iso();
@@ -64,6 +70,7 @@ int main(int argc, char *argv[]) {
   char *iso_target = (char *)"";
   char *cdrom = (char *)"0";
   char *ro = (char *)"1";
+  char *windows_mode = (char *)"0";  // NEW: Windows mode flag
   char *configfs = (char *)"0";
   char *usbgadget = (char *)"0";
 
@@ -72,6 +79,9 @@ int main(int argc, char *argv[]) {
       ro = (char *)"0";
     } else if (strcmp(argv[i], "-cdrom") == 0) {
       cdrom = (char *)"1";
+    } else if (strcmp(argv[i], "-windows") == 0) {  // NEW: Windows mode flag
+      windows_mode = (char *)"1";
+      printf("Windows ISO mode will be enabled\n");
     } else if (strcmp(argv[i], "-configfs") == 0) {
       configfs = (char *)"1";
     } else if (strcmp(argv[i], "-usbgadget") == 0) {
@@ -90,21 +100,33 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  if (strcmp(cdrom, "0") != 0 && strcmp(ro, "1") != 0) {
+  // Windows mode implies CD-ROM and read-only, so skip conflict check
+  if (strcmp(windows_mode, "1") == 0) {
+    cdrom = (char *)"1";
+    ro = (char *)"1";
+  } else if (strcmp(cdrom, "0") != 0 && strcmp(ro, "0") == 0) {
     printf("Incompatible arguments -cdrom and -rw\n");
     return 1;
   }
 
   if (strcmp(configfs, "1") == 0)
-    configs(iso_target, cdrom, ro);
+    configs(iso_target, cdrom, ro, windows_mode);
   else if (strcmp(usbgadget, "1") == 0)
   {
+    if (strcmp(windows_mode, "1") == 0) {
+      printf("Warning: Windows mode is only supported with configfs backend\n");
+    }
     usb(iso_target, cdrom, ro);
   }
   else if (supported())
-    configs(iso_target, cdrom, ro);
+    configs(iso_target, cdrom, ro, windows_mode);
   else if (usb_supported())
+  {
+    if (strcmp(windows_mode, "1") == 0) {
+      printf("Warning: Windows mode is only supported with configfs backend\n");
+    }
     usb(iso_target, cdrom, ro);
+  }
   else
     printf("Device does not support isodrive\n");
   return 0;

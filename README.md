@@ -22,6 +22,7 @@ Run without any arguments to unmount any mounted files and display this help mes
 Optional arguments:
 -rw		Mounts the file in read write mode.
 -cdrom		Mounts the file as a cdrom.
+-windows	Enables Windows ISO mode (auto-enables CD-ROM, read-only, and Windows-compatible USB descriptors).
 -configfs	Forces the app to use configfs.
 -usbgadget	Forces the app to use sysfs.
 ```
@@ -38,6 +39,11 @@ mount iso as cdrom
 isodrive /path/to/file.iso -cdrom
 ```
 
+mount Windows ISO (with Windows-compatible USB descriptors)
+```bash
+isodrive /path/to/Windows10.iso -windows
+```
+
 ## Linux
 * Has been only tested on Halium based mobile linux, but should work on mainline devices too.
 
@@ -50,6 +56,13 @@ isodrive /path/to/file.iso -cdrom
 ## Os Support
 * Should support almost every bootable OS images, but for those who don't work or need extra steps, are documented in the [WIKI](https://github.com/nitanmarcel/isodrive/wiki)
 
+## Windows ISO Support
+* The `-windows` flag configures the USB gadget with Windows-compatible descriptors for improved boot compatibility
+* Windows ISOs should be mounted using the `-windows` flag for best results
+* This feature automatically sets CD-ROM mode and read-only as required for Windows boot
+* Uses appropriate USB vendor/product IDs and device strings that Windows recognizes during setup
+
 ## Credits
 
 Inspired by https://github.com/fredldotme/ISODriveUT
+Original Tool at https://github.com/nitanmarcel/isodrive
