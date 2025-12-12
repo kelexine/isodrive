@@ -1,4 +1,7 @@
 compile_commands.json
 isodrive
 src/*.o
-*.bak
+build/
+build_cmake/
+*.zip
+.DS_Store

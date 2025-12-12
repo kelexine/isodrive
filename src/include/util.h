@@ -1,11 +1,13 @@
 #ifndef UTIL_H
 #define UTIL_H
 
-char *fs_mount_point(char *filesystem_type);
-char *strjin(char *w1, char *w2);
-bool isdir(char *path);
-bool isfile(char *path);
-char *sysfs_read(char *path);
-void sysfs_write(char *path, char *content);
+#include <string>
+
+std::string fs_mount_point(const std::string& filesystem_type);
+bool isdir(const std::string& path);
+bool isfile(const std::string& path);
+bool is_hybrid_iso(const std::string& path);
+std::string sysfs_read(const std::string& path);
+void sysfs_write(const std::string& path, const std::string& content);
 
 #endif // ifndef UTIL_H

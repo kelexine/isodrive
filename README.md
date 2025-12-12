@@ -1,16 +1,40 @@
-# isodrive (configfs)
+# isodrive (configfs) - Fork by kelexine
 
 ## Building
 
-* `sudo apt install build-essential`
+### Prerequisites
+* **Linux:** `build-essential`, `cmake`
+* **Android (Termux):** `clang`, `cmake`, `make`, `zip`
 
-* `git clone https://github.com/kelexine/isodrive`
+### Build Instructions
 
-* `cd isodrive`
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/kelexine/isodrive
+    cd isodrive
+    ```
 
-* `make`
+2.  **Build:**
+    ```bash
+    make
+    ```
+    This automatically creates the `build` directory and compiles the project.
 
-* `sudo make install` (optional)
+3.  **Install (Optional):**
+    ```bash
+    sudo make install
+    ```
+
+4.  **Build Magisk Module:**
+    ```bash
+    make magisk
+    ```
+    This will generate `isodrive-magisk.zip` in the project root.
+
+5.  **Run Tests:**
+    ```bash
+    make test
+    ```
 
 ## Usage
 ```bash
@@ -22,26 +46,21 @@ Run without any arguments to unmount any mounted files and display this help mes
 Optional arguments:
 -rw		Mounts the file in read write mode.
 -cdrom		Mounts the file as a cdrom.
--windows	Enables Windows ISO mode (auto-enables CD-ROM, read-only, and Windows-compatible USB descriptors).
+-hdd		Forces the file to be mounted as a hard disk (disables auto-detect).
 -configfs	Forces the app to use configfs.
 -usbgadget	Forces the app to use sysfs.
 ```
 
 ### Examples
 
-mount iso as rw
+Mount ISO as Read-Write:
 ```bash
-isodrive /path/to/file.iso -rw
+sudo isodrive /path/to/file.iso -rw
 ```
 
-mount iso as cdrom
+Mount ISO as CD-ROM:
 ```bash
-isodrive /path/to/file.iso -cdrom
-```
-
-mount Windows ISO (with Windows-compatible USB descriptors)
-```bash
-isodrive /path/to/Windows10.iso -windows
+sudo isodrive /path/to/file.iso -cdrom
 ```
 
 ## Linux
@@ -49,20 +68,16 @@ isodrive /path/to/Windows10.iso -windows
 
 ## Android
 
-* On Android can be compiled in termux, using clang++
+* On Android can be compiled in Termux, using `clang` and `cmake`.
 * On Android you might manually need to mount configfs by running: `mount -t configfs configfs /sys/kernel/config`
-* A magisk module is also available for download [HERE](https://github.com/nitanmarcel/isodrive-magisk/releases/latest)
+* You can build a Magisk module directly by running `make magisk`.
 
-## Os Support
-* Should support almost every bootable OS images, but for those who don't work or need extra steps, are documented in the [WIKI](https://github.com/nitanmarcel/isodrive/wiki)
-
-## Windows ISO Support
-* The `-windows` flag configures the USB gadget with Windows-compatible descriptors for improved boot compatibility
-* Windows ISOs should be mounted using the `-windows` flag for best results
-* This feature automatically sets CD-ROM mode and read-only as required for Windows boot
-* Uses appropriate USB vendor/product IDs and device strings that Windows recognizes during setup
+## OS Support
+* **Windows ISOs:** Automatically detected and mounted as CD-ROM for better compatibility.
+* Should support almost every bootable OS images. Issues or extra steps are documented in the [WIKI](https://github.com/kelexine/isodrive/wiki)
 
 ## Credits
 
-Inspired by https://github.com/fredldotme/ISODriveUT
-Original Tool at https://github.com/nitanmarcel/isodrive
+* Fork maintained by **kelexine**
+* Original project by **nitanmarcel**
+* Inspired by https://github.com/fredldotme/ISODriveUT
