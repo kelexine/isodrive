@@ -12,6 +12,7 @@ include_directories(src/include)
 
 set(LIB_SOURCES
     src/util.cpp
+    src/logger.cpp
     src/configfsisomanager.cpp
     src/androidusbisomanager.cpp
 )
@@ -24,10 +25,30 @@ target_link_libraries(isodrive PRIVATE isodrive_lib)
 include(GNUInstallDirs)
 install(TARGETS isodrive DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+# Testing
 enable_testing()
+
+# Mock library for tests
+add_library(mock_sysfs STATIC tests/mock_sysfs.cpp)
+target_include_directories(mock_sysfs PUBLIC tests)
+
+# Test: util functions
 add_executable(test_util tests/test_util.cpp)
 target_link_libraries(test_util PRIVATE isodrive_lib)
+target_include_directories(test_util PRIVATE tests)
 add_test(NAME test_util COMMAND test_util)
+
+# Test: configfs module
+add_executable(test_configfs tests/test_configfs.cpp)
+target_link_libraries(test_configfs PRIVATE isodrive_lib mock_sysfs)
+target_include_directories(test_configfs PRIVATE tests)
+add_test(NAME test_configfs COMMAND test_configfs)
+
+# Test: android module
+add_executable(test_android tests/test_android.cpp)
+target_link_libraries(test_android PRIVATE isodrive_lib mock_sysfs)
+target_include_directories(test_android PRIVATE tests)
+add_test(NAME test_android COMMAND test_android)
 
 # Magisk Target
 add_custom_target(magisk

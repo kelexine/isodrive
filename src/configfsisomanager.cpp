@@ -1,7 +1,7 @@
 #include "configfsisomanager.h"
+#include "logger.h"
 #include "util.h"
 #include <filesystem>
-#include <iostream>
 #include <string>
 #include <vector>
 
@@ -18,6 +18,7 @@ std::string get_gadget_root() {
   fs::path usbGadgetRoot = fs::path(configFsRoot) / "usb_gadget";
 
   if (!fs::exists(usbGadgetRoot) || !fs::is_directory(usbGadgetRoot)) {
+      log_debug("usb_gadget directory not found at " + usbGadgetRoot.string());
       return "";
   }
 
@@ -28,9 +29,11 @@ std::string get_gadget_root() {
       fs::path udcFile = gadget / "UDC";
 
       if (!sysfs_read(udcFile.string()).empty()) {
+          log_debug("Found active gadget: " + gadget.string());
           return gadget.string();
       }
   }
+  log_debug("No active gadget found in " + usbGadgetRoot.string());
   return "";
 }
 
@@ -40,89 +43,174 @@ std::string get_config_root() {
 
   fs::path usbConfigRoot = fs::path(gadgetRoot) / "configs";
 
-  if (!fs::exists(usbConfigRoot) || !fs::is_directory(usbConfigRoot)) return "";
+  if (!fs::exists(usbConfigRoot) || !fs::is_directory(usbConfigRoot)) {
+    log_debug("configs directory not found at " + usbConfigRoot.string());
+    return "";
+  }
 
   for (const auto& entry : fs::directory_iterator(usbConfigRoot)) {
        if (entry.path().filename().string()[0] != '.') {
            return entry.path().string();
        }
   }
+  log_debug("No config found in " + usbConfigRoot.string());
   return "";
 }
 
-void configure_windows_descriptors(const std::string& gadgetRoot) {
-  std::cout << "\n=== Configuring Windows-compatible USB descriptors ===" << std::endl;
+static bool configure_windows_descriptors(const std::string& gadgetRoot, const WindowsMountOptions& win_opts) {
+  log_info("");
+  log_info("=== Configuring Windows-compatible USB descriptors ===");
   
   fs::path root = gadgetRoot;
+  bool success = true;
 
   // Set vendor/product IDs that Windows recognizes
   // Using IDs commonly associated with CD-ROM/mass storage devices
-  sysfs_write((root / "idVendor").string(), "0x058f");  // Alcor Micro Corp
-  sysfs_write((root / "idProduct").string(), "0x6387"); // Mass Storage
+  success &= sysfs_write((root / "idVendor").string(), "0x058f");  // Alcor Micro Corp
+  success &= sysfs_write((root / "idProduct").string(), "0x6387"); // Mass Storage
   
-  // Set USB 2.0 specification version
-  sysfs_write((root / "bcdUSB").string(), "0x0200");
+  // Set USB version based on options
+  if (win_opts.use_usb3) {
+    log_info("Using USB 3.0 descriptors");
+    success &= sysfs_write((root / "bcdUSB").string(), "0x0300");
+  } else {
+    success &= sysfs_write((root / "bcdUSB").string(), "0x0200");
+  }
   
   // Set device version
-  sysfs_write((root / "bcdDevice").string(), "0x0100");
+  success &= sysfs_write((root / "bcdDevice").string(), "0x0100");
   
   // Set device class to 0x00 (defined at interface level)
-  sysfs_write((root / "bDeviceClass").string(), "0x00");
-  sysfs_write((root / "bDeviceSubClass").string(), "0x00");
-  sysfs_write((root / "bDeviceProtocol").string(), "0x00");
+  success &= sysfs_write((root / "bDeviceClass").string(), "0x00");
+  success &= sysfs_write((root / "bDeviceSubClass").string(), "0x00");
+  success &= sysfs_write((root / "bDeviceProtocol").string(), "0x00");
+  
+  // Set max power (important for USB 3.0)
+  fs::path maxPowerFile = root / "configs/c.1/MaxPower";
+  if (fs::exists(maxPowerFile.parent_path())) {
+    if (win_opts.use_usb3) {
+      success &= sysfs_write(maxPowerFile.string(), "896");  // 896mA for USB 3.0
+    } else {
+      success &= sysfs_write(maxPowerFile.string(), "500");  // 500mA for USB 2.0
+    }
+  }
   
   // Configure device strings (important for Windows driver binding)
   fs::path stringsPath = root / "strings/0x409";
   
   // Create strings directory if it doesn't exist
   if (!fs::exists(stringsPath)) {
-    fs::create_directories(stringsPath);
+    std::error_code ec;
+    fs::create_directories(stringsPath, ec);
+    if (ec) {
+      log_error("Failed to create strings directory: " + ec.message());
+      return false;
+    }
   }
   
-  // Use generic strings that Windows recognizes
-  sysfs_write((stringsPath / "manufacturer").string(), "Generic");
-  sysfs_write((stringsPath / "product").string(), "USB Mass Storage");
-  sysfs_write((stringsPath / "serialnumber").string(), "000000000001");
+  // Set product string based on Windows version
+  std::string product_string = "USB Mass Storage";
+  if (win_opts.version == WindowsVersion::WIN11) {
+    product_string = "USB CD-ROM Drive";
+  } else if (win_opts.version == WindowsVersion::WIN10) {
+    product_string = "USB CD-ROM Drive";
+  }
   
-  std::cout << "Windows USB descriptors configured" << std::endl;
+  success &= sysfs_write((stringsPath / "manufacturer").string(), "Generic");
+  success &= sysfs_write((stringsPath / "product").string(), product_string);
+  success &= sysfs_write((stringsPath / "serialnumber").string(), "000000000001");
+  
+  if (success) {
+    log_info("Windows USB descriptors configured");
+  } else {
+    log_warn("Some Windows USB descriptor writes failed");
+  }
+  
+  return success;
 }
 
-void configure_windows_mass_storage(const std::string& lunRoot) {
-  std::cout << "Configuring Windows mass storage settings..." << std::endl;
+static bool configure_windows_mass_storage(const std::string& lunRoot, const WindowsMountOptions& win_opts) {
+  log_info("Configuring Windows mass storage settings...");
   
   fs::path root = lunRoot;
+  bool success = true;
 
   // Set removable flag (critical for Windows CD-ROM recognition)
-  sysfs_write((root / "removable").string(), "1");
+  success &= sysfs_write((root / "removable").string(), "1");
   
   // Disable forced unit access for better stability
   fs::path nofuaFile = root / "nofua";
   if (fs::exists(nofuaFile)) {
-    sysfs_write(nofuaFile.string(), "1");
+    success &= sysfs_write(nofuaFile.string(), "1");
   }
   
-  // Set inquiry string if supported (helps Windows identify the device)
+  // Set inquiry string based on Windows version
   fs::path inquiryFile = root / "inquiry_string";
   if (fs::exists(inquiryFile)) {
-    sysfs_write(inquiryFile.string(), "Generic  USB CD-ROM       1.00");
+    std::string inquiry;
+    if (win_opts.version == WindowsVersion::WIN11) {
+      inquiry = "Generic  USB CD-ROM       1.00";
+    } else if (win_opts.version == WindowsVersion::WIN10) {
+      inquiry = "Generic  USB CD-ROM       1.00";
+    } else {
+      inquiry = "Generic  USB CD-ROM       1.00";
+    }
+    success &= sysfs_write(inquiryFile.string(), inquiry);
   }
   
-  std::cout << "Windows mass storage settings configured" << std::endl;
+  if (success) {
+    log_info("Windows mass storage settings configured");
+  } else {
+    log_warn("Some Windows mass storage settings failed");
+  }
+  
+  return success;
 }
 
-void mount_iso(const std::string& iso_path, bool cdrom, bool ro, bool windows_mode) {
+static void print_windows_info(const WindowsMountOptions& win_opts) {
+  log_info("");
+  log_info("****************************************");
+  log_info("***    WINDOWS ISO MODE ENABLED     ***");
+  log_info("****************************************");
+  log_info("");
+  
+  // Show detected version
+  log_info("Detected: " + windows_version_to_string(win_opts.version));
+  
+  // Show boot mode info
+  if (win_opts.has_uefi && win_opts.has_legacy) {
+    log_info("Boot Mode: UEFI + Legacy BIOS (dual boot)");
+  } else if (win_opts.has_uefi) {
+    log_info("Boot Mode: UEFI only");
+  } else if (win_opts.has_legacy) {
+    log_info("Boot Mode: Legacy BIOS only");
+  } else {
+    log_info("Boot Mode: Unknown");
+  }
+  
+  // Show USB mode
+  if (win_opts.use_usb3) {
+    log_info("USB Mode: USB 3.0 (SuperSpeed)");
+  } else {
+    log_info("USB Mode: USB 2.0 (High Speed)");
+  }
+  
+  log_info("");
+}
+
+bool mount_iso(const std::string& iso_path, bool cdrom, bool ro, const WindowsMountOptions& win_opts) {
   std::string gadgetRoot = get_gadget_root();
 
   if (gadgetRoot.empty()) {
-    std::cerr << "No active gadget found!" << std::endl;
-    return;
+    log_error("No active gadget found!");
+    return false;
   }
   std::string configRoot = get_config_root();
   std::string udc = get_udc();
 
   if (udc.empty()) {
-    std::cerr << "Failed to get UDC!" << std::endl;
-    return;
+    log_error("Failed to get UDC!");
+    return false;
   }
 
   fs::path functionRoot = fs::path(gadgetRoot) / "functions";
@@ -134,73 +222,117 @@ void mount_iso(const std::string& iso_path, bool cdrom, bool ro, bool windows_mo
   fs::path lunCdRom = lunRoot / "cdrom";
   fs::path lunRo = lunRoot / "ro";
 
+  bool success = true;
+
   // Disable UDC before making changes
-  set_udc("", gadgetRoot);
+  if (!set_udc("", gadgetRoot)) {
+    log_warn("Failed to disable UDC before configuration");
+  }
 
   // If Windows mode is enabled, configure USB descriptors
-  if (windows_mode) {
-    std::cout << "\n****************************************" << std::endl;
-    std::cout << "*** WINDOWS ISO MODE ENABLED ***" << std::endl;
-    std::cout << "****************************************" << std::endl;
+  if (win_opts.enabled) {
+    print_windows_info(win_opts);
     
-    configure_windows_descriptors(gadgetRoot);
+    if (!configure_windows_descriptors(gadgetRoot, win_opts)) {
+      log_warn("Windows descriptor configuration had errors");
+    }
     
     // Force CD-ROM and read-only mode for Windows ISOs
     cdrom = true;
     ro = true;
     
-    std::cout << "Forced CD-ROM mode: enabled" << std::endl;
-    std::cout << "Forced read-only: enabled" << std::endl;
+    log_info("Forced CD-ROM mode: enabled");
+    log_info("Forced read-only: enabled");
   }
 
   if (!fs::exists(massStorageRoot)) {
-    fs::create_directories(massStorageRoot);
+    std::error_code ec;
+    fs::create_directories(massStorageRoot, ec);
+    if (ec) {
+      log_error("Failed to create mass_storage function: " + ec.message());
+      set_udc(udc, gadgetRoot);
+      return false;
+    }
   }
 
   // Disable stall for better Windows compatibility
-  sysfs_write(stallFile.string(), "0");
+  success &= sysfs_write(stallFile.string(), "0");
 
-  sysfs_write(lunFile.string(), "");
+  success &= sysfs_write(lunFile.string(), "");
 
   if (!iso_path.empty())
   {
     fs::path linkPath = fs::path(configRoot) / "mass_storage.0";
     if (!fs::exists(linkPath)) {
-      fs::create_directory_symlink(massStorageRoot, linkPath);
+      std::error_code ec;
+      fs::create_directory_symlink(massStorageRoot, linkPath, ec);
+      if (ec) {
+        log_error("Failed to create symlink: " + ec.message());
+        set_udc(udc, gadgetRoot);
+        return false;
+      }
     }
     
-    sysfs_write(lunCdRom.string(), cdrom ? "1" : "0");
-    sysfs_write(lunRo.string(), ro ? "1" : "0");
+    success &= sysfs_write(lunCdRom.string(), cdrom ? "1" : "0");
+    success &= sysfs_write(lunRo.string(), ro ? "1" : "0");
 
     // Apply Windows-specific mass storage settings
-    if (windows_mode) {
-      configure_windows_mass_storage(lunRoot.string());
+    if (win_opts.enabled) {
+      if (!configure_windows_mass_storage(lunRoot.string(), win_opts)) {
+        log_warn("Windows mass storage configuration had errors");
+      }
     }
 
-    sysfs_write(lunFile.string(), iso_path);
+    success &= sysfs_write(lunFile.string(), iso_path);
 
-    if (windows_mode) {
-      std::cout << "\n****************************************" << std::endl;
-      std::cout << "Windows ISO mounted successfully!" << std::endl;
-      std::cout << "Device should be recognized by Windows Setup" << std::endl;
-      std::cout << "as a bootable CD-ROM drive." << std::endl;
-      std::cout << "****************************************\n" << std::endl;
+    if (win_opts.enabled) {
+      log_info("");
+      log_info("****************************************");
+      log_info("Windows ISO mounted successfully!");
+      log_info("");
+      log_info("The device should be recognized by Windows");
+      log_info("Setup as a bootable CD-ROM drive.");
+      
+      if (win_opts.has_uefi) {
+        log_info("");
+        log_info("For UEFI boot:");
+        log_info("  - Select UEFI boot from your boot menu");
+        log_info("  - Secure Boot may need to be disabled");
+      }
+      
+      if (win_opts.has_legacy) {
+        log_info("");
+        log_info("For Legacy BIOS boot:");
+        log_info("  - Select USB-CDROM from your boot menu");
+      }
+      
+      log_info("****************************************");
+      log_info("");
     }
   }
   else
   {
     fs::path linkPath = fs::path(configRoot) / "mass_storage.0";
     if (fs::exists(linkPath)) {
-        fs::remove(linkPath);
+      std::error_code ec;
+      fs::remove(linkPath, ec);
+      if (ec) {
+        log_warn("Failed to remove symlink: " + ec.message());
+      }
     }
   }
 
-  set_udc(udc, gadgetRoot);
+  if (!set_udc(udc, gadgetRoot)) {
+    log_error("Failed to re-enable UDC");
+    return false;
+  }
+
+  return success;
 }
 
-void set_udc(const std::string& udc, const std::string& gadget) {
+bool set_udc(const std::string& udc, const std::string& gadget) {
   fs::path udcFile = fs::path(gadget) / "UDC";
-  sysfs_write(udcFile.string(), udc);
+  return sysfs_write(udcFile.string(), udc);
 }
 
 std::string get_udc() {

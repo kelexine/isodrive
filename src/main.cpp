@@ -1,5 +1,6 @@
 #include "androidusbisomanager.h"
 #include "configfsisomanager.h"
+#include "logger.h"
 #include "util.h"
 #include <iostream>
 #include <string>
@@ -14,39 +15,47 @@ void print_help() {
             << "Optional arguments:\n"
             << "-rw\t\t Mounts the file in read write mode.\n"
             << "-cdrom\t\t Mounts the file as a cdrom.\n"
-            << "-windows\t Enables Windows ISO mode (auto-enables CD-ROM, read-only, and Windows-compatible USB descriptors).\n"
-            << "-hdd\t\t Forces the file to be mounted as a hard disk (disables auto-detect).\n"
+            << "-hdd\t\t Forces the file to be mounted as a hard disk (disables auto-detect).\n\n"
+            << "Windows ISO options:\n"
+            << "-windows\t Enables Windows ISO mode (auto-detects if not specified).\n"
+            << "-win10\t\t Forces Windows 10 mode.\n"
+            << "-win11\t\t Forces Windows 11 mode.\n"
+            << "-usb3\t\t Uses USB 3.0 (SuperSpeed) descriptors.\n\n"
+            << "Backend options:\n"
             << "-configfs\t Forces the app to use configfs.\n"
-            << "-usbgadget\t Forces the app to use sysfs.\n\n";
+            << "-usbgadget\t Forces the app to use sysfs.\n\n"
+            << "Output options:\n"
+            << "-v, -verbose\t Enables verbose/debug output.\n"
+            << "-q, -quiet\t Suppresses all output except errors.\n\n";
 }
 
-void configs(const std::string& iso_target, bool cdrom, bool ro, bool windows_mode) {
-  std::cout << "Using configfs!" << std::endl;
+bool configs(const std::string& iso_target, bool cdrom, bool ro, const WindowsMountOptions& win_opts) {
+  log_info("Using configfs!");
 
   if (!supported())
   {
-    std::cerr << "usb_gadget is not supported!" << std::endl;
-    return;
+    log_error("usb_gadget is not supported!");
+    return false;
   }
   
-  mount_iso(iso_target, cdrom, ro, windows_mode);
+  return mount_iso(iso_target, cdrom, ro, win_opts);
 }
 
-void usb(const std::string& iso_target, bool cdrom, bool ro) {
-  std::cout << "Using sysfs!" << std::endl;
+bool usb(const std::string& iso_target, bool cdrom, bool ro) {
+  log_info("Using sysfs!");
   if (!usb_supported())
   {
-    std::cerr << "usb_gadget is not supported!" << std::endl;
-    return;
+    log_error("usb_gadget is not supported!");
+    return false;
   }
   if (cdrom || !ro)
   {
-    std::cout << "cdrom/ro flags ignored. (this is expected)" << std::endl;
+    log_warn("cdrom/ro flags ignored. (this is expected for sysfs backend)");
   }
   if (iso_target.empty())
-    usb_reset_iso();
+    return usb_reset_iso();
   else
-    usb_mount_iso(iso_target);
+    return usb_mount_iso(iso_target);
 }
 
 int main(int argc, char *argv[]) {
@@ -61,7 +70,12 @@ int main(int argc, char *argv[]) {
   bool force_configfs = false;
   bool force_usbgadget = false;
   bool force_hdd = false;
+  
+  // Windows options
   bool windows_mode = false;
+  bool force_win10 = false;
+  bool force_win11 = false;
+  bool use_usb3 = false;
 
   for (int i = 1; i < argc; i++) {
     std::string arg = argv[i];
@@ -71,13 +85,25 @@ int main(int argc, char *argv[]) {
       cdrom = true;
     } else if (arg == "-windows") {
       windows_mode = true;
+    } else if (arg == "-win10") {
+      windows_mode = true;
+      force_win10 = true;
+    } else if (arg == "-win11") {
+      windows_mode = true;
+      force_win11 = true;
+    } else if (arg == "-usb3") {
+      use_usb3 = true;
     } else if (arg == "-hdd") {
       force_hdd = true;
     } else if (arg == "-configfs") {
       force_configfs = true;
     } else if (arg == "-usbgadget") {
       force_usbgadget = true;
-    } else if (iso_target.empty()) {
+    } else if (arg == "-v" || arg == "-verbose") {
+      log_set_level(LogLevel::DEBUG);
+    } else if (arg == "-q" || arg == "-quiet") {
+      log_set_level(LogLevel::ERROR);
+    } else if (iso_target.empty() && arg[0] != '-') {
       iso_target = arg;
     }
   }
@@ -88,46 +114,91 @@ int main(int argc, char *argv[]) {
 
   // Check for incompatible flags
   if (cdrom && !ro && !windows_mode) {
-    std::cerr << "Incompatible arguments -cdrom and -rw" << std::endl;
+    log_error("Incompatible arguments -cdrom and -rw");
     return 1;
   }
 
   if (cdrom && force_hdd) {
-    std::cerr << "Incompatible arguments -cdrom and -hdd" << std::endl;
+    log_error("Incompatible arguments -cdrom and -hdd");
+    return 1;
+  }
+
+  if (force_win10 && force_win11) {
+    log_error("Incompatible arguments -win10 and -win11");
     return 1;
   }
 
   if (!iso_target.empty() && !isfile(iso_target)) {
-    std::cerr << "Error: File not found: " << iso_target << std::endl;
+    log_error("File not found: " + iso_target);
     return 1;
   }
 
-  // Auto-detect Windows/Non-hybrid ISOs
-  if (!iso_target.empty() && !cdrom && ro && !force_hdd && !windows_mode) {
-    if (!is_hybrid_iso(iso_target)) {
-      std::cout << "Non-hybrid ISO detected (e.g. Windows). Auto-enabling Windows Mode." << std::endl;
-      windows_mode = true;
-      // Windows mode implies CD-ROM, which configfsisomanager handles.
+  // Build Windows mount options
+  WindowsMountOptions win_opts = {};
+  win_opts.enabled = false;
+  win_opts.version = WindowsVersion::NONE;
+  win_opts.use_usb3 = use_usb3;
+  win_opts.has_uefi = false;
+  win_opts.has_legacy = false;
+
+  // Auto-detect Windows ISO if not forcing HDD mode
+  if (!iso_target.empty() && !force_hdd) {
+    // Check if it's a Windows ISO
+    WindowsIsoInfo iso_info = get_windows_iso_info(iso_target);
+    
+    if (iso_info.is_windows || windows_mode) {
+      win_opts.enabled = true;
+      
+      // Use detected info unless overridden
+      if (force_win11) {
+        win_opts.version = WindowsVersion::WIN11;
+      } else if (force_win10) {
+        win_opts.version = WindowsVersion::WIN10;
+      } else if (iso_info.is_windows) {
+        win_opts.version = iso_info.version;
+      } else {
+        win_opts.version = WindowsVersion::WIN_UNKNOWN;
+      }
+      
+      win_opts.has_uefi = iso_info.has_uefi;
+      win_opts.has_legacy = iso_info.has_legacy;
+      
+      // If we detected Windows, show info
+      if (iso_info.is_windows && !windows_mode) {
+        log_info("Windows ISO detected: " + iso_info.volume_label);
+        log_info("Auto-enabling Windows mode.");
+      }
+    } else if (!is_hybrid_iso(iso_target) && !cdrom) {
+      // Non-hybrid, non-Windows ISO - still use CD-ROM mode
+      log_info("Non-hybrid ISO detected. Mounting as CD-ROM.");
+      cdrom = true;
     }
   }
 
-  if (force_configfs)
-    configs(iso_target, cdrom, ro, windows_mode);
+  bool success = false;
+
+  if (force_configfs) {
+    success = configs(iso_target, cdrom, ro, win_opts);
+  }
   else if (force_usbgadget) {
-    if (windows_mode) {
-       std::cout << "Warning: Windows mode is only supported with configfs backend" << std::endl;
+    if (win_opts.enabled) {
+       log_warn("Windows mode is only supported with configfs backend");
     }
-    usb(iso_target, cdrom, ro);
+    success = usb(iso_target, cdrom, ro);
   }
-  else if (supported())
-    configs(iso_target, cdrom, ro, windows_mode);
+  else if (supported()) {
+    success = configs(iso_target, cdrom, ro, win_opts);
+  }
   else if (usb_supported()) {
-    if (windows_mode) {
-       std::cout << "Warning: Windows mode is only supported with configfs backend" << std::endl;
+    if (win_opts.enabled) {
+       log_warn("Windows mode is only supported with configfs backend");
     }
-    usb(iso_target, cdrom, ro);
+    success = usb(iso_target, cdrom, ro);
   }
-  else
-    std::cerr << "Device does not support isodrive" << std::endl;
-  return 0;
+  else {
+    log_error("Device does not support isodrive");
+    return 1;
+  }
+
+  return success ? 0 : 1;
 }
